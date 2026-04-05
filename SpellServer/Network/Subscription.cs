@@ -174,8 +174,8 @@ namespace SpellServer
             KickGhostSessions(player, creds.AccountId, PlayerManager.Players);
 
             // 4. Multibox check (same hardware serial)
-            ErrorType multiboxError = CheckMultibox(serial, creds.Admin, PlayerManager.Players);
-            if (multiboxError != ErrorType.None) { RejectLogin(player, multiboxError, serial, username); return; }
+            // ErrorType multiboxError = CheckMultibox(serial, creds.Admin, PlayerManager.Players);
+            // if (multiboxError != ErrorType.None) { RejectLogin(player, multiboxError, serial, username); return; }
 
             // 5. Ban check
             if (MySQL.BannedSerials.IsBanned(serial)) { RejectLogin(player, ErrorType.BannedComputer, serial, username); return; }
