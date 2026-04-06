@@ -308,7 +308,7 @@ namespace SpellServer
             {
                 PlayerId = PlayerManager.Players.AvailableId;
 
-                if (PlayerId == 0)
+                if (PlayerId == 0) //TODO Some of this code should be somewhere else.
                 {
                     Network.Send(this, GamePacket.Outgoing.Login.Error(Subscription.ErrorType.ServerFull));
                     Network.Disconnect(this);

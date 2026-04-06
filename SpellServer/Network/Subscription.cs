@@ -93,23 +93,18 @@ namespace SpellServer
             return result;
         }
 
-        /// <summary>Kick any existing session with the same account ID.
-        /// Only closes the socket and flags for disconnect — all cleanup
-        /// (DB, arena, player list removal) happens in Network.Disconnect
-        /// from the ghost's own ProcessReceive thread.</summary>
-        public static void KickGhostSessions(Player newPlayer, int accountId, PlayerManager players)
+        /// <summary>Check if the account already has an active session.
+        /// Returns LoggedIn error if so — the old session will clean itself up
+        /// via ReceiveTimeout (30s) or normal disconnect. Client retries.</summary>
+        public static ErrorType CheckAlreadyLoggedIn(int accountId, PlayerManager players)
         {
-            Player ghost = players.FindByAccountId(accountId);
-            if (ghost == null || ghost == newPlayer) return;
-
-            Program.Log($"[Ghost] Kicking ghost session for {ghost.Username} (AID {accountId})", System.Drawing.Color.Orange);
-
-            ghost.DisconnectReason = Resources.Strings_Disconnect.MultipleLogin;
-            ghost.Disconnect = true;
-
-            // Close socket to unblock ghost's ProcessReceive → triggers Network.Disconnect
-            try { ghost.TcpClient?.Client?.Close(); } catch { }
-            try { ghost.TcpClient?.Close(); } catch { }
+            Player existing = players.FindByAccountId(accountId);
+            if (existing != null)
+            {
+                Program.Log($"[Login] Denied — account {accountId} already has active session ({existing.Username})", System.Drawing.Color.Orange);
+                return ErrorType.LoggedIn;
+            }
+            return ErrorType.None;
         }
 
         /// <summary>Check if another player with the same hardware serial is already connected.</summary>
@@ -168,14 +163,12 @@ namespace SpellServer
             ErrorType fullError = CheckServerFull(PlayerManager.Players.GetFreePlayerCount(), creds.Admin, creds.MagestormPlus);
             if (fullError != ErrorType.None) { RejectLogin(player, fullError, serial, username); return; }
 
-            // 3. Kick ghost sessions (removes from player list before serial check)
-            KickGhostSessions(player, creds.AccountId, PlayerManager.Players);
+            // 3. Deny if already logged in — old session cleans up via 30s ReceiveTimeout
+            ErrorType loggedInError = CheckAlreadyLoggedIn(creds.AccountId, PlayerManager.Players);
+            if (loggedInError != ErrorType.None) { RejectLogin(player, loggedInError, serial, username); return; }
 
-            // Multibox check removed — serial is unreliable (patched clients send "?\")
-            // and it blocks legitimate logins. Use IP bans if needed.
-
-            // 5. Ban check
-            if (MySQL.BannedSerials.IsBanned(serial)) { RejectLogin(player, ErrorType.BannedComputer, serial, username); return; }
+            // 5. Ban check TODO Ban IP instead of serial
+            // if (MySQL.BannedSerials.IsBanned(serial)) { RejectLogin(player, ErrorType.BannedComputer, serial, username); return; }
 
             // 6. Server lock check
             ErrorType lockError = CheckServerLock(Settings.Default.Locked, creds.Admin);

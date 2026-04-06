@@ -24,53 +24,37 @@ namespace SpellServer.Tests
         // ================================================================
 
         [Test]
-        public void KickGhost_FlagsGhostForDisconnect()
+        public void CheckAlreadyLoggedIn_ExistingSession_ReturnsLoggedIn()
         {
-            var ghost = MakePlayer(100, "Ghost");
-            var newPlayer = MakePlayer(0, "NewLogin");
+            var existing = MakePlayer(100, "Existing");
             var players = new PlayerManager();
-            players.Add(ghost);
+            players.Add(existing);
 
-            Subscription.KickGhostSessions(newPlayer, 100, players);
+            var result = Subscription.CheckAlreadyLoggedIn(100, players);
 
-            Assert.IsTrue(ghost.Disconnect);
+            Assert.AreEqual(Subscription.ErrorType.LoggedIn, result);
         }
 
         [Test]
-        public void KickGhost_FlagsDisconnectButDoesNotRemove()
+        public void CheckAlreadyLoggedIn_NoSession_ReturnsNone()
         {
-            // Ghost stays in list — ProcessReceive cleans up when socket close triggers
-            var ghost = MakePlayer(100, "Ghost");
-            var newPlayer = MakePlayer(0, "NewLogin");
             var players = new PlayerManager();
-            players.Add(ghost);
 
-            Subscription.KickGhostSessions(newPlayer, 100, players);
+            var result = Subscription.CheckAlreadyLoggedIn(100, players);
 
-            Assert.IsTrue(ghost.Disconnect, "Ghost should be flagged for disconnect");
-            Assert.IsNotNull(players.FindByAccountId(100), "Ghost stays in list until ProcessReceive cleans up");
+            Assert.AreEqual(Subscription.ErrorType.None, result);
         }
 
         [Test]
-        public void KickGhost_DoesNotKickSelf()
+        public void CheckAlreadyLoggedIn_DifferentAccount_ReturnsNone()
         {
-            var player = MakePlayer(100, "Self");
+            var existing = MakePlayer(200, "OtherPlayer");
             var players = new PlayerManager();
-            players.Add(player);
+            players.Add(existing);
 
-            Subscription.KickGhostSessions(player, 100, players);
+            var result = Subscription.CheckAlreadyLoggedIn(100, players);
 
-            Assert.IsFalse(player.Disconnect);
-            Assert.AreEqual(1, players.Count);
-        }
-
-        [Test]
-        public void KickGhost_NoGhost_DoesNothing()
-        {
-            var newPlayer = MakePlayer(0, "NewLogin");
-            var players = new PlayerManager();
-
-            Assert.DoesNotThrow(() => Subscription.KickGhostSessions(newPlayer, 100, players));
+            Assert.AreEqual(Subscription.ErrorType.None, result);
         }
 
         // ================================================================
@@ -142,21 +126,22 @@ namespace SpellServer.Tests
         // ================================================================
 
         [Test]
-        public void KickGhost_ThenMultibox_GhostStillInList()
+        public void CheckAlreadyLoggedIn_BlocksReconnectUntilOldSessionClears()
         {
-            // Multibox check is no longer called in auth flow, but CheckMultibox
-            // still exists. Ghost stays in list until ProcessReceive cleans up.
-            var ghost = MakePlayer(100, "Ghost", serial: "SAME_SERIAL");
-            var newPlayer = MakePlayer(0, "NewLogin", serial: "SAME_SERIAL");
+            // With deny-and-timeout, the old session stays in the list.
+            // New login is denied until the old session times out (30s ReceiveTimeout).
+            var existing = MakePlayer(100, "Existing", serial: "SAME_SERIAL");
             var players = new PlayerManager();
-            players.Add(ghost);
+            players.Add(existing);
 
-            Subscription.KickGhostSessions(newPlayer, 100, players);
+            // First attempt: denied
+            Assert.AreEqual(Subscription.ErrorType.LoggedIn, Subscription.CheckAlreadyLoggedIn(100, players));
 
-            // Ghost is flagged but not removed — multibox would still find it,
-            // which is why we removed the multibox check from the auth flow
-            Assert.IsTrue(ghost.Disconnect);
-            Assert.IsNotNull(players.FindByAccountId(100));
+            // Simulate old session cleanup (ReceiveTimeout → Network.Disconnect → Remove)
+            players.Remove(existing);
+
+            // Second attempt: allowed
+            Assert.AreEqual(Subscription.ErrorType.None, Subscription.CheckAlreadyLoggedIn(100, players));
         }
 
         // ================================================================
