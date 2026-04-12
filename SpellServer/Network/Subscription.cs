@@ -64,6 +64,13 @@ namespace SpellServer
             try
             {
                 DataTable query = MySQL.Accounts.GetAccountData(username);
+
+                if (query == null || query.Rows.Count == 0)
+                {
+                    result.Error = ErrorType.AccountDoesNotExist;
+                    return result;
+                }
+
                 DataRow row = query.Rows[0];
 
                 if (PasswordHasher.Verify(password, row["password"].ToString()))

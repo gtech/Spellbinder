@@ -223,8 +223,8 @@ namespace SpellServer
             {
                 var kv = pair.Split(new[] { '=' }, 2);
                 if (kv.Length != 2) continue;
-                var key = Uri.UnescapeDataString(kv[0]).Trim();
-                var val = Uri.UnescapeDataString(kv[1]).Trim();
+                var key = Uri.UnescapeDataString(kv[0].Replace('+', ' ')).Trim();
+                var val = Uri.UnescapeDataString(kv[1].Replace('+', ' '));
                 if (key == "username") username = val;
                 else if (key == "password") password = val;
             }
@@ -250,9 +250,36 @@ namespace SpellServer
                 return;
             }
 
-            // Check if account exists
+            // Game client encodes credentials as null-terminated ASCII in a fixed-size
+            // packet field. Non-ASCII, spaces, and null bytes cause silent login failures.
+            foreach (char c in username)
+            {
+                if (c <= 0x20 || c > 0x7E)
+                {
+                    Program.Log($"[API] Register rejected: '{username}' contains invalid character 0x{(int)c:X2}", Color.DarkOrange);
+                    Respond(context, 400, "{\"error\":\"no spaces or special characters in username\"}");
+                    return;
+                }
+            }
+            foreach (char c in password)
+            {
+                if (c <= 0x20 || c > 0x7E)
+                {
+                    Program.Log($"[API] Register rejected: password for '{username}' contains invalid character 0x{(int)c:X2}", Color.DarkOrange);
+                    Respond(context, 400, "{\"error\":\"no spaces or special characters in password\"}");
+                    return;
+                }
+            }
+
+            // Check if account exists — null means DB error, don't proceed
             var existing = MySQL.Accounts.GetAccountData(username);
-            if (existing != null && existing.Rows.Count > 0)
+            if (existing == null)
+            {
+                Program.Log($"[API] Register failed: '{username}' — DB lookup returned null", Color.Red);
+                Respond(context, 500, "{\"error\":\"database error, please try again\"}");
+                return;
+            }
+            if (existing.Rows.Count > 0)
             {
                 Program.Log($"[API] Register rejected: '{username}' already exists", Color.DarkOrange);
                 Respond(context, 409, "{\"error\":\"account already exists\"}");
