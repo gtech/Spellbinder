@@ -38,6 +38,47 @@ namespace SpellServer
         public static UdpClient _gameUDPListener;
         public static bool _udpServerRunning = true;
         private static readonly Dictionary<IPEndPoint, Player> _udpClients = new Dictionary<IPEndPoint, Player>();
+
+        // ================================================================
+        // Deferred send queue — arena tick threads queue sends while holding
+        // SyncRoot, then drain after releasing the lock. Eliminates deadlock
+        // from socket I/O under lock.
+        // ================================================================
+
+        internal struct DeferredSend
+        {
+            public Player Target;
+            public Packet Packet;
+            public bool IsUdp;
+        }
+
+        [ThreadStatic]
+        private static List<DeferredSend> t_sendQueue;
+
+        internal static void BeginQueueing()
+        {
+            if (t_sendQueue == null)
+                t_sendQueue = new List<DeferredSend>(128);
+            else
+                t_sendQueue.Clear();
+        }
+
+        internal static List<DeferredSend> EndQueueing()
+        {
+            var queue = t_sendQueue;
+            t_sendQueue = null;
+            return queue;
+        }
+
+        internal static void DrainQueue(List<DeferredSend> queue)
+        {
+            if (queue == null) return;
+            for (int i = 0; i < queue.Count; i++)
+            {
+                var item = queue[i];
+                SendImmediate(item.Target, item.Packet, item.IsUdp);
+            }
+        }
         private static readonly Dictionary<byte, Func<Player, MemoryStream, bool, Packets.InPacket>> _packetFactories =
             BuildPacketFactories();
 
@@ -730,14 +771,12 @@ namespace SpellServer
             try
             {
                 Packet packet = new Packet(inStream);
-                if (!UDP)
+                if (t_sendQueue != null)
                 {
-                    player.TcpClient.Client.BeginSend(packet.PacketData, 0, packet.PacketData.Length, SocketFlags.None, SendCallback, new SendCallbackSyncResult(player));
+                    t_sendQueue.Add(new DeferredSend { Target = player, Packet = packet, IsUdp = UDP });
+                    return;
                 }
-                else
-                {
-                    _gameUDPListener.BeginSend(packet.PacketData, packet.PacketData.Length, player.UdpIpAddress, BitConverter.ToInt16(player.UdpportBE, 0), SendCallbackUDP, new SendCallbackSyncResult(player));
-                }
+                SendImmediate(player, packet, UDP);
             }
             catch (Exception)
             {
@@ -768,6 +807,16 @@ namespace SpellServer
         public static void Send(Player player, Packet packet, bool UDP = false)
         {
             if (player.IsBot) return;
+            if (t_sendQueue != null)
+            {
+                t_sendQueue.Add(new DeferredSend { Target = player, Packet = packet, IsUdp = UDP });
+                return;
+            }
+            SendImmediate(player, packet, UDP);
+        }
+
+        private static void SendImmediate(Player player, Packet packet, bool UDP)
+        {
             try
             {
                 if (!UDP)
@@ -781,7 +830,7 @@ namespace SpellServer
             }
             catch (Exception)
             {
-                player.DisconnectReason = "Send (Byte) Error";
+                player.DisconnectReason = "Send Error";
                 player.Disconnect = true;
             }
         }

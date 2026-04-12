@@ -390,6 +390,8 @@ namespace SpellServer
                 ProcessingTick.Reset();
                 LastTickTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
+                Network.BeginQueueing();
+
                 lock (SyncRoot)
                 {
                     if (CurrentState != State.Ended)
@@ -464,15 +466,18 @@ namespace SpellServer
 
                         CleanupTick.Reset();
                     }
-                    else 
+                    else
                     {
                         EndMatch(true);
-                        
+
                         Thread.Sleep(10);
                     }
                 }
+
+                // Drain queued sends outside the lock — no socket I/O while holding SyncRoot
+                Network.DrainQueue(Network.EndQueueing());
             }
-            
+
             this.ArenaPlayers.Clear();
 
         }
