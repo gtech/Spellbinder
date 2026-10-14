@@ -58,10 +58,16 @@ while true; do
             echo "===================" >> watchdog_dumps.log
 
             echo "[watchdog] $(date '+%H:%M:%S') Restarting container"
-            podman restart "$CONTAINER"
+            if ! podman restart "$CONTAINER"; then
+                # Stale rootless podman state (e.g. after a host reboot) makes every
+                # restart fail with "invalid internal status" until migrated.
+                echo "[watchdog] $(date '+%H:%M:%S') RESTART FAILED — running podman system migrate"
+                podman system migrate
+                podman start "$CONTAINER" || echo "[watchdog] $(date '+%H:%M:%S') START FAILED — needs manual attention"
+            fi
             sleep 10
             fails=0
-            echo "[watchdog] $(date '+%H:%M:%S') Restarted"
+            echo "[watchdog] $(date '+%H:%M:%S') Restart attempted"
         fi
     fi
 
