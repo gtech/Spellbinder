@@ -22,7 +22,10 @@ echo "Building..."
 podman build -t spellbinder .
 
 echo "Starting..."
-podman run -d --name spellbinder --network host \
+# --restart=always + podman-restart.service brings the container back after a
+# host reboot (rootless podman has no daemon; also needs `loginctl enable-linger`).
+systemctl --user enable podman-restart.service >/dev/null 2>&1 || true
+podman run -d --name spellbinder --network host --restart=always \
   -v ./Content:/app/Content -v spellbinder-data:/var/lib/mysql \
   -v ./Logs:/app/Logs spellbinder "$@"
 
