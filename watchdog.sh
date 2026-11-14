@@ -6,6 +6,9 @@
 # Usage: ./watchdog.sh &
 # Safe to call from cron — exits if already running.
 
+# Cron starts us in $HOME; dumps, Logs/ and run_container.sh are relative to here.
+cd "$(dirname "$0")"
+
 PIDFILE="/tmp/spellbinder-watchdog.pid"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     exit 0
@@ -17,8 +20,37 @@ CONTAINER="spellbinder"
 HEALTH_URL="http://localhost:10603/api/health"
 FAIL_THRESHOLD=3
 POLL_INTERVAL=10
+# Loading arenas takes ~70s on boot. Failures while the container is younger
+# than this are startup, not a hang — don't count them, or we kill it mid-load.
+STARTUP_GRACE=180
 
 fails=0
+
+# Seconds since the container last started; huge if it doesn't exist.
+container_age() {
+    local started
+    started=$(podman inspect "$CONTAINER" --format '{{.State.StartedAt.Unix}}' 2>/dev/null) || { echo 999999; return; }
+    echo $(( $(date +%s) - started ))
+}
+
+recover_container() {
+    podman restart "$CONTAINER" && return 0
+
+    # Stale rootless podman state (e.g. after a host reboot) makes every
+    # restart fail with "invalid internal status" until migrated.
+    echo "[watchdog] $(date '+%H:%M:%S') RESTART FAILED — running podman system migrate"
+    podman system migrate
+    podman start "$CONTAINER" && return 0
+
+    # A container caught mid-shutdown by a reboot can be left "Stopping" in
+    # podman's DB while runc has no record of it. stop/kill/cleanup are all
+    # no-ops on it; only rm clears it. Data is in a named volume, so recreate.
+    echo "[watchdog] $(date '+%H:%M:%S') START FAILED — recreating container"
+    podman rm -f --ignore "$CONTAINER" && ./run_container.sh && return 0
+
+    echo "[watchdog] $(date '+%H:%M:%S') RECREATE FAILED — needs manual attention"
+    return 1
+}
 
 echo "[watchdog] Started. Polling $HEALTH_URL every ${POLL_INTERVAL}s (threshold: ${FAIL_THRESHOLD} failures)"
 
@@ -30,6 +62,9 @@ while true; do
         if [ $fails -gt 0 ]; then
             echo "[watchdog] $(date '+%H:%M:%S') Recovered after $fails failures"
         fi
+        fails=0
+    elif age=$(container_age) && [ "$age" -lt "$STARTUP_GRACE" ]; then
+        echo "[watchdog] $(date '+%H:%M:%S') Not healthy yet, container started ${age}s ago — in startup grace"
         fails=0
     else
         fails=$((fails + 1))
@@ -58,16 +93,10 @@ while true; do
             echo "===================" >> watchdog_dumps.log
 
             echo "[watchdog] $(date '+%H:%M:%S') Restarting container"
-            if ! podman restart "$CONTAINER"; then
-                # Stale rootless podman state (e.g. after a host reboot) makes every
-                # restart fail with "invalid internal status" until migrated.
-                echo "[watchdog] $(date '+%H:%M:%S') RESTART FAILED — running podman system migrate"
-                podman system migrate
-                podman start "$CONTAINER" || echo "[watchdog] $(date '+%H:%M:%S') START FAILED — needs manual attention"
+            if recover_container; then
+                echo "[watchdog] $(date '+%H:%M:%S') Restarted"
             fi
-            sleep 10
             fails=0
-            echo "[watchdog] $(date '+%H:%M:%S') Restart attempted"
         fi
     fi
 
